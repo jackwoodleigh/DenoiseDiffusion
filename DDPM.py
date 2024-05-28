@@ -16,7 +16,6 @@ class DiffusionModel:
                  learning_rate=0.001,
                  in_channels=3,
                  out_channels=3,
-                 time_dim=256,
                  noise_steps=1000,
                  beta_start=1e-4,
                  beta_end=0.02,
@@ -37,7 +36,7 @@ class DiffusionModel:
         self.alpha = 1. - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
 
-        self.model = UNet(in_channels=in_channels, out_channels=out_channels, img_size=img_size, time_dim=time_dim, num_classes=num_class).to(device)
+        self.model = UNet(in_channels=in_channels, out_channels=out_channels, img_size=img_size, time_dim=noise_steps, num_classes=num_class).to(device)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate, eps=1e-5)
         self.scheduler = None
 
