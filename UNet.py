@@ -88,7 +88,7 @@ class SelfAttentionBlock(nn.Module):
 
 # Conditional
 class UNet(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, num_classes=None, time_dim=256, device="cuda"):
+    def __init__(self, in_channels=3, out_channels=3, num_classes=None, time_dim=256, img_size=64, device="cuda"):
         super(UNet, self).__init__()
         self.device = device
         self.time_dim = time_dim
@@ -96,24 +96,24 @@ class UNet(nn.Module):
         self.in_conv = DoubleConvBlock(in_channels, 64)
 
         self.down1 = DownBlock(64, 128)
-        self.sa1 = SelfAttentionBlock(128, 32)
+        self.sa1 = SelfAttentionBlock(128, img_size//2)
 
         self.down2 = DownBlock(128, 256)
-        self.sa2 = SelfAttentionBlock(256, 16)
+        self.sa2 = SelfAttentionBlock(256, img_size//4)
 
         self.down3 = DownBlock(256, 256)
-        self.sa3 = SelfAttentionBlock(256, 8)
+        self.sa3 = SelfAttentionBlock(256, img_size//8)
 
         self.bot1 = DoubleConvBlock(256, 512)
         self.bot2 = DoubleConvBlock(512, 512)
         self.bot3 = DoubleConvBlock(512,256)
 
         self.up1 = UpSampleBlock(512, 128)
-        self.sa4 = SelfAttentionBlock(128,16)
+        self.sa4 = SelfAttentionBlock(128,img_size//4)
         self.up2 = UpSampleBlock(256, 64)
-        self.sa5 = SelfAttentionBlock(64, 32)
+        self.sa5 = SelfAttentionBlock(64, img_size//2)
         self.up3 = UpSampleBlock(128, 64)
-        self.sa6 = SelfAttentionBlock(64, 64)
+        self.sa6 = SelfAttentionBlock(64, img_size)
         self.out_conv = nn.Conv2d(64, out_channels, kernel_size=1)
 
         if num_classes is not None:
