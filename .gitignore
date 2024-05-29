@@ -1,0 +1,6 @@
+.idea
+V1/.ipynb_checkpoints
+V1/__pycache__
+V1/data
+V1/diffusion_model.pth
+V1/wandb
