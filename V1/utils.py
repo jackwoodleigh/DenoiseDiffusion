@@ -17,3 +17,9 @@ def save_images(images, path, **kwargs):
     im = Image.fromarray(ndarr)
     im.save(path)
 
+def return_image(images, **kwargs):
+    grid = torchvision.utils.make_grid(images, **kwargs)
+    ndarr = grid.permute(1, 2, 0).to("cpu").numpy()
+    img = Image.fromarray(ndarr)
+    return img
+
