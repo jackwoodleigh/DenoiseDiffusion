@@ -43,6 +43,82 @@ class UNet_ResidualBlock(nn.Module):
         else:
             self.residual_layer = nn.Conv2d(in_channels, out_channels,kernel_size=1, padding=0)
 
+    # relating the latent with time embedding such that output is depending on the combination
+    def forward(self, x, t):
+        residual = x
+        x = self.groupnorm(x)
+        x = f.silu(x)
+        x = self.conv(x)
+
+        t = f.silu(t)
+        t = self.linear_time(t)
+
+        merge = x + t.unsqueeze(-1).unsqueeze(-1)
+        merge = self.groupnorm_merge(merge)
+        merge = f.silu(merge)
+        merge = self.conv_merge(merge)
+
+        return merge
+
+
+
+class UNet_AttentionBlock(nn.Module):
+    def __init__(self, n_heads, n_embd, d_context=768):
+        super().__init__()
+        channels = n_heads * n_embd
+
+        self.groupnorm = nn.GroupNorm(32, channels, eps=1e-6)
+        self.conv_inp = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
+        self.layernorm1 = nn.LayerNorm(channels)
+        self.attention1 = SelfAttention(n_heads, channels, in_projection_bias=False)
+        self.layernorm2 = nn.LayerNorm(channels)
+        self.attention2 = CrossAttention(n_heads, channels, d_context, in_projection_bias=False)
+        self.layernorm3 = nn.LayerNorm(channels)
+
+        self.linear_gelu1 = nn.LayerNorm(channels, 4*2*channels)
+        self.linear_gelu2 = nn.LayerNorm(4*channels, channels)
+        self.conv_out = nn.Conv2d(channels, channels, kernel_size=1, padding=0)
+
+    def forward(self, x, context):
+        long_residual = x
+        x = self.groupnorm(x)
+        x = self.conv_inp(x)
+
+        n, c, h, w = x.shape
+
+        x = x.view((n,c,h*w))
+        x = x.transpose(-1, -2)
+
+        # norm with self attention + residual
+        short_residual = x
+        x = self.layernorm1(x)
+        self.attention1(x)
+        x += short_residual
+
+        # norm with cross attention + residual
+        short_residual = x
+        x = self.layernorm2(x)
+        self.attention2(x, context)
+        x += short_residual
+
+        # norm with FF and gelu + residual
+        short_residual = x
+        x = self.layernorm3(x)
+        x, gate = self.linear_gelu1(x).chunk(2, dim=-1)
+        x = x * f.gelu(gate)
+        x = self.linear_gelu2(x)
+        x += short_residual
+
+        # reverse transform
+        x = x.transpose(-1, -2)
+        x = x.view((n, c, h, w))
+
+        x = self.conv_out(x)
+        return x + long_residual
+
+
+
+
 
 
 class Upsample(nn.Module):
@@ -61,7 +137,7 @@ class UNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = nn.Module([
-            # starts with (batchsize, 4, height/8, width/8)
+            # starts with (batchsize, 4, height/8, width/8) assuming VAE latents input
             SwitchSequential(nn.Conv2d(4,320, kernel_size=3, padding=1)),
             SwitchSequential(UNet_ResidualBlock(320, 320), UNet_AttentionBlock(8, 40)),
             SwitchSequential(UNet_ResidualBlock(320, 320), UNet_AttentionBlock(8, 40)),
@@ -89,7 +165,7 @@ class UNet(nn.Module):
         )
 
         self.decoder = nn.Module([
-            # taking in residue
+            # taking in residual
             SwitchSequential(UNet_ResidualBlock(2560, 1280)),
             SwitchSequential(UNet_ResidualBlock(2560, 1280)),
             SwitchSequential(UNet_ResidualBlock(2560, 1280), Upsample(1280)),
@@ -129,12 +205,12 @@ class Diffusion(nn.Module):
         self.unet = UNet()
         self.final = UNet_OutputLayer(320, 4)
 
-    def forward(self, latent, context, t):
+    def forward(self, latent, context, time):
         # latent (batch_size, 4, height/8, width/8) from VAE
         # context (batch_size, seq_len, dim) from CLIP
         # time (1, time_dim)
 
-        t = self.time_embedding(t)
+        time = self.time_embedding(time)
         output = self.UNet(latent, context, time)
         output = self.final(output)
         return output

@@ -23,9 +23,9 @@ class VAE_ResidualBlock(nn.Module):
             self.residual_layer = nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0)
 
     def forward(self, x):
-        residue = x
+        residual = x
         x = self.layers(x)
-        return x + self.residual_layer(residue)
+        return x + self.residual_layer(residual)
 
 
 class VAE_AttentionBlock(nn.Module):
@@ -36,7 +36,7 @@ class VAE_AttentionBlock(nn.Module):
 
 
     def forward(self, x):
-        residue = x
+        residual = x
 
         # batch size, channels, height, width
         n, c, h, w = x.shape
@@ -53,8 +53,8 @@ class VAE_AttentionBlock(nn.Module):
 
         x = x.veiw((n, c, h, w))
 
-        # return to original shape and return with residue
-        return x + residue
+        # return to original shape and return with residual
+        return x + residual
 
 
 

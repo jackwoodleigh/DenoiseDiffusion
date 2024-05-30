@@ -56,3 +56,45 @@ class SelfAttention(nn.Module):
         output = output.reshape(input_shape)
         output = self.out_projection(output)
         return output
+
+
+class CrossAttention(nn.Module):
+    def __init__(self, n_heads, d_embd, d_cross, in_proj_bias=True, out_proj_bias=True):
+        super().__init__()
+        self.q_proj = nn.Linear(d_embd, d_embd, bias=in_proj_bias)
+        self.k_proj = nn.Linear(d_cross, d_embd, bias=in_proj_bias)
+        self.v_proj = nn.Linear(d_cross, d_embd, bias=in_proj_bias)
+        self.out_proj = nn.Linear(d_embd, d_embd, bias=out_proj_bias)
+        self.n_heads = n_heads
+        self.d_heads = d_embd // n_heads
+
+    # x = sequence of q
+    # y = sequence of k,v
+    def forward(self, x, y):
+        input_shape = x.shape
+        batch_size, sequence_length, d_embed = input_shape
+        interim_shape = (batch_size, -1, self.n_heads, self.d_heads)
+
+        # applying weights
+        q = self.q_proj(x)
+        k = self.k_proj(y)
+        v = self.v_proj(y)
+
+        q = q.view(interim_shape).transpose(1, 2)
+        k = k.view(interim_shape).transpose(1, 2)
+        v = v.view(interim_shape).transpose(1, 2)
+
+        weight = q @ k.transpose(-1, -2)
+
+        weight /= math.sqrt(self.d_heads)
+
+        # no mask because we want to enable any token to interact with any pixel
+
+        weight = f.softmax(weight, dim=-1)
+        output = weight @ v
+
+        output = output.transpose(1,2).contiguous()
+        output = output.view(input_shape)
+        output = self.out_proj(output)
+
+        return output

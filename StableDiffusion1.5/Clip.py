@@ -29,20 +29,20 @@ class CLIPLayer(nn.Module):
         self.linear2 = nn.Linear(4*n_embd, n_embd)
 
     def forward(self, x):
-        residue = x
+        residual = x
 
         # self attention
         x = self.layer_norm(x)
         x = self.attention(x, c_mask=True)
-        x += residue
+        x += residual
 
         # feed forward
-        residue = x
+        residual = x
         x = self.layer_norm2(x)
         x = self.linear1(x)
         x = x * torch.sigmoid(1.702 * x)    # quick gelu
         x = self.linear2(x)
-        x += residue
+        x += residual
 
         return x
 
