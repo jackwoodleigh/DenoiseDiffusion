@@ -53,6 +53,7 @@ class VAE_AttentionBlock(nn.Module):
 
         x = x.veiw((n, c, h, w))
 
+        # return to original shape and return with residue
         return x + residue
 
 
@@ -122,3 +123,54 @@ class VAE_Encoder(nn.Module):
         z *= 0.18215
 
         return z
+
+class VAE_Decoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Conv2d(4, 4, kernel_size=1, padding=0),
+            nn.Conv2d(4, 512, kernel_size=3, padding=1),
+
+            VAE_ResidualBlock(512, 512),
+            VAE_AttentionBlock(512),
+
+            VAE_ResidualBlock(512, 512),
+            VAE_ResidualBlock(512, 512),
+            VAE_ResidualBlock(512, 512),
+            VAE_ResidualBlock(512, 512),
+
+            # upscales image by 2 such that (batch_size, 512, height/4, width/4)
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+
+            VAE_ResidualBlock(512, 512),
+            VAE_ResidualBlock(512, 512),
+            VAE_ResidualBlock(512, 512),
+
+            # (batch_size, 512, height/2, width/2)
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+
+            VAE_ResidualBlock(512, 256),
+            VAE_ResidualBlock(256, 256),
+            VAE_ResidualBlock(256, 256),
+
+            #(batch_size, 512, height, width)
+            nn.Upsample(scale_factor=2),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+
+            VAE_ResidualBlock(256, 128),
+            VAE_ResidualBlock(128, 128),
+            VAE_ResidualBlock(128, 128),
+
+            nn.GroupNorm(32, 128),
+
+            nn.SiLU(),
+
+            nn.Conv2d(128, 3, kernel_size=3, padding=1)
+        )
+
+    def forward(self, x):
+        # reverse scaling from encoder
+        x /= 0.18215
+        return self.layers(x)

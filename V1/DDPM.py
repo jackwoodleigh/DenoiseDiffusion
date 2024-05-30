@@ -113,7 +113,7 @@ class DiffusionModel:
         self.scaler.scale(loss).backward()
         self.scaler.step(self.optimizer)
         self.scaler.update()
-        self.scheduler.step()
+        #self.scheduler.step()
 
     def predict(self, loader, no_grad=True, desc=""):
         running_loss = 0
@@ -129,7 +129,7 @@ class DiffusionModel:
                 x_t, noise = self.noise_images(images, t)
 
                 # randomly not use labels
-                if np.random.random() < 0.2:
+                if np.random.random() < 0.1:
                     labels = None
 
             # 1) predict noise
@@ -148,8 +148,7 @@ class DiffusionModel:
         return running_loss / len(loader)
 
     def train(self, training_loader, validation_loader, epochs, log=False):
-        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=self.learning_rate,
-                                                             steps_per_epoch=len(training_loader), epochs=epochs)
+        #self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=self.learning_rate, steps_per_epoch=len(training_loader), epochs=epochs)
         epoch_training_loss = []
         epoch_validation_loss = []
         for e in range(epochs):
@@ -165,15 +164,17 @@ class DiffusionModel:
 
             print(
                 f"Average Training Loss = {epoch_training_loss[-1]}, Average Validation Loss = {epoch_validation_loss[-1]}")
-            print()
+
             if log:
-                image = None
-                if e % 10 == 0:
-                    pil_image = self.sample(8, torch.tensor([2]).to(self.device))
-                    image = wandb.Image(pil_image, caption=f"class 2")
+                #image = None
+                #if e % 2 == 0:
+                pil_image = self.sample(8, torch.tensor([2]).to(self.device))
+                image = wandb.Image(pil_image, caption=f"class 2")
 
                 wandb.log({"Training_Loss": epoch_training_loss[-1], "Validation_Loss": epoch_validation_loss[-1], "Sample": image})
                 self.save_model("diffusion_model.pth")
+
+            print()
 
     def save_model(self, file_path):
         torch.save({
