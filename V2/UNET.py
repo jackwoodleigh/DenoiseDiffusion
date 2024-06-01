@@ -4,9 +4,9 @@ from torch import nn
 from torch.nn import functional as f
 from Attention import SelfAttention, CrossAttention
 
-def TimeEmbedding(t, dim, max_period=1000):
+def TimeEmbedding(t, dim, max_period=1000, device="cuda"):
     half_dim = dim // 2
-    frequencies = torch.exp(-np.log(max_period) * torch.arange(0, half_dim, dtype=torch.float32) / half_dim)
+    frequencies = torch.exp(-np.log(max_period) * torch.arange(0, half_dim, device=device, dtype=torch.float32) / half_dim)
     angles = t[:, None].float() * frequencies[None, :]
     embeddings = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
     if dim % 2 == 1:  # if dim is odd, add an extra zero column
@@ -74,8 +74,10 @@ class UNET_AttentionBlock(nn.Module):
 
         self.layernorm_1 = nn.LayerNorm(channels)
         self.attention_1 = SelfAttention(n_head, channels, in_proj_bias=False)
-        self.layernorm_2 = nn.LayerNorm(channels)
-        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
+
+        '''self.layernorm_2 = nn.LayerNorm(channels)
+        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)'''
+        
         self.layernorm_3 = nn.LayerNorm(channels)
         self.linear_geglu_1 = nn.Linear(channels, 4 * channels * 2)
         self.linear_geglu_2 = nn.Linear(4 * channels, channels)
@@ -193,7 +195,7 @@ class UNET(nn.Module):
             nn.Conv2d(64, 3, kernel_size=3, padding=1)
         )
 
-    def forward(self, x, t):
+    def forward(self, x, t, context):
         t = TimeEmbedding(t, 320)
         residuals = []
         for layer in self.encoder:
