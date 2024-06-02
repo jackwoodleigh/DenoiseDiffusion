@@ -26,7 +26,7 @@ class SwitchSequential(nn.Sequential):
 
 
 class UNET_ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dim_t=256):
+    def __init__(self, in_channels, out_channels, time_embd_dim=256):
         super().__init__()
         self.input = nn.Sequential(
             nn.GroupNorm(4, in_channels),
@@ -35,7 +35,7 @@ class UNET_ResidualBlock(nn.Module):
         )
         self.time_layer = nn.Sequential(
             nn.SiLU(),
-            nn.Linear(dim_t, out_channels)
+            nn.Linear(time_embd_dim, out_channels)
         )
 
         self.output = nn.Sequential(
@@ -64,7 +64,7 @@ class UNET_ResidualBlock(nn.Module):
 
 
 class UNET_AttentionBlock(nn.Module):
-    def __init__(self, n_head: int, n_embd: int, d_context=256):
+    def __init__(self, n_head: int, n_embd: int, context_embd_dim=256):
         super().__init__()
         channels = n_head * n_embd
 
@@ -75,7 +75,7 @@ class UNET_AttentionBlock(nn.Module):
         self.attention_1 = SelfAttention(n_head, channels, in_proj_bias=False)
 
         self.layernorm_2 = nn.LayerNorm(channels)
-        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
+        self.attention_2 = CrossAttention(n_head, channels, context_embd_dim, in_proj_bias=False)
         
         self.layernorm_3 = nn.LayerNorm(channels)
         self.linear_geglu_1 = nn.Linear(channels, 4 * channels * 2)
@@ -134,35 +134,40 @@ class Upsample(nn.Module):
 
 
 class UNET(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, dim_t=256, img_size=32):
+    def __init__(self, in_channels=3, out_channels=3, context_embd_dim=256, time_embd_dim=256):
         super().__init__()
-        self.context_emb = nn.Embedding(num_embeddings=10, embedding_dim=256)
+        self.context_embd_dim = context_embd_dim
+        self.time_embd_dim = time_embd_dim
+        self.context_emb = nn.Embedding(num_embeddings=10, embedding_dim=context_embd_dim)
 
         self.encoder = nn.ModuleList([
             SwitchSequential(nn.Conv2d(in_channels, 64, kernel_size=3, padding=1)),
-            SwitchSequential(UNET_ResidualBlock(64, 64), UNET_AttentionBlock(4, 16)),
-            SwitchSequential(UNET_ResidualBlock(64, 128), UNET_AttentionBlock(4, 32)),
+            SwitchSequential(UNET_ResidualBlock(64, 64, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 16, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(64, 64, time_embd_dim=time_embd_dim),UNET_AttentionBlock(4, 16, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(64, 128, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim)),
 
             # Image size / 2
             SwitchSequential(nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)),
-            SwitchSequential(UNET_ResidualBlock(128, 128),  UNET_AttentionBlock(4, 32)),
-            SwitchSequential(UNET_ResidualBlock(128, 256),  UNET_AttentionBlock(4, 64)),
+            SwitchSequential(UNET_ResidualBlock(128, 128, time_embd_dim=time_embd_dim),  UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(128, 128, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(128, 256, time_embd_dim=time_embd_dim),  UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim)),
 
             # Image size / 4
             SwitchSequential(nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)),
-            SwitchSequential(UNET_ResidualBlock(256, 256), UNET_AttentionBlock(4, 64)),
-            SwitchSequential(UNET_ResidualBlock(256, 512),  UNET_AttentionBlock(4, 128)),
+            SwitchSequential(UNET_ResidualBlock(256, 256, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(256, 256, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(256, 512, time_embd_dim=time_embd_dim),  UNET_AttentionBlock(4, 128, context_embd_dim=context_embd_dim)),
 
             # Image size / 8
             SwitchSequential(nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1)),
-            SwitchSequential(UNET_ResidualBlock(512, 512)),
-            SwitchSequential(UNET_ResidualBlock(512, 512)),
+            SwitchSequential(UNET_ResidualBlock(512, 512, time_embd_dim=time_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(512, 512, time_embd_dim=time_embd_dim)),
         ])
 
         self.bottleneck = nn.ModuleList([
-            SwitchSequential(UNET_ResidualBlock(512, 1024)),
-            SwitchSequential(UNET_ResidualBlock(1024, 1024)),
-            SwitchSequential(UNET_ResidualBlock(1024, 512)),
+            SwitchSequential(UNET_ResidualBlock(512, 1024, time_embd_dim=time_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(1024, 1024, time_embd_dim=time_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(1024, 512, time_embd_dim=time_embd_dim)),
         ])
 
         self.decoder = nn.ModuleList([
@@ -170,34 +175,39 @@ class UNET(nn.Module):
             # at each step concatenating output from bottleneck with residual from encoder
 
             # Image size /4
-            SwitchSequential(UNET_ResidualBlock(1024, 512)),
-            SwitchSequential(UNET_ResidualBlock(1024, 512)),
-            SwitchSequential(UNET_ResidualBlock(1024, 512), Upsample(512)),
+            SwitchSequential(UNET_ResidualBlock(1024, 512, time_embd_dim=time_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(1024, 512, time_embd_dim=time_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(1024, 512, time_embd_dim=time_embd_dim), Upsample(512)),
 
             # Image size / 2
-            SwitchSequential(UNET_ResidualBlock(1024, 256), UNET_AttentionBlock(4, 64)),
-            SwitchSequential(UNET_ResidualBlock(512, 256), UNET_AttentionBlock(4, 64)),
-            SwitchSequential(UNET_ResidualBlock(512, 256), UNET_AttentionBlock(4, 64), Upsample(256)),
+            SwitchSequential(UNET_ResidualBlock(1024, 256, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(512, 256, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(512, 256, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(512, 256, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 64, context_embd_dim=context_embd_dim), Upsample(256)),
 
             # Image size
-            SwitchSequential(UNET_ResidualBlock(512, 128), UNET_AttentionBlock(4, 32)),
-            SwitchSequential(UNET_ResidualBlock(256, 128), UNET_AttentionBlock(4, 32)),
-            SwitchSequential(UNET_ResidualBlock(256, 128), UNET_AttentionBlock(4, 32), Upsample(128)),
+            SwitchSequential(UNET_ResidualBlock(512, 128, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(256, 128, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(256, 128, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(256, 128, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 32, context_embd_dim=context_embd_dim), Upsample(128)),
 
-            SwitchSequential(UNET_ResidualBlock(256, 64), UNET_AttentionBlock(4, 16)),
-            SwitchSequential(UNET_ResidualBlock(128, 64), UNET_AttentionBlock(4, 16)),
-            SwitchSequential(UNET_ResidualBlock(128, 64), UNET_AttentionBlock(4, 16)),
+            SwitchSequential(UNET_ResidualBlock(256, 64, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 16, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(128, 64, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 16, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(128, 64, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 16, context_embd_dim=context_embd_dim)),
+            SwitchSequential(UNET_ResidualBlock(128, 64, time_embd_dim=time_embd_dim), UNET_AttentionBlock(4, 16, context_embd_dim=context_embd_dim)),
 
         ])
 
         self.output_layer = nn.Sequential(
             nn.GroupNorm(4, 64),
             nn.SiLU(),
-            nn.Conv2d(64, out_channels, kernel_size=3, padding=1)
+            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(32, out_channels, kernel_size=3, padding=1)
         )
 
     def forward(self, x, t, context):
-        t = TimeEmbedding(t, 256)
+        t = TimeEmbedding(t, self.time_embd_dim)
 
         if context is not None:
             context = self.context_emb(context)
@@ -216,7 +226,6 @@ class UNET(nn.Module):
 
         return self.output_layer(x)
 
-
-t = torch.arange(10)
-img = torch.randn(10, 3, 32, 32)
-net = UNET()
+'''
+n = UNET()
+print(sum(p.numel() for p in n.parameters() if p.requires_grad))'''

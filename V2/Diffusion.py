@@ -7,9 +7,19 @@ import numpy as np
 from tqdm import tqdm
 
 
-class Diffusion(nn.Module):
-    def __init__(self, img_size=32, noise_steps=1000, learning_rate=0.0001, beta_start=0.00085, beta_end=0.0120,
+class DiffusionModel(nn.Module):
+    def __init__(self, img_size=32,
+                 in_channels=3,
+                 out_channels=3,
+                 noise_steps=1000,
+                 learning_rate=0.0001,
+                 beta_start=0.00085,
+                 beta_end=0.0120,
+                 num_classes=10,
+                 context_embd_dim=256,
+                 time_embd_dim=256,
                  device="cuda"):
+
         super().__init__()
         self.img_size = img_size
         self.noise_steps = noise_steps
@@ -17,7 +27,13 @@ class Diffusion(nn.Module):
         self.beta_end = beta_end
         self.device = device
 
-        self.model = UNET().to(device)
+        self.model = UNET(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            context_embd_dim=context_embd_dim,
+            time_embd_dim=time_embd_dim
+        ).to(device)
+
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
         self.MSE = nn.MSELoss()
         self.scaler = torch.cuda.amp.GradScaler()
@@ -42,11 +58,12 @@ class Diffusion(nn.Module):
 
     def train_model(self, training_loader, validation_loader, epochs, cfg_scale=7.5):
         self.model.train()
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=epochs)
-
+        #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=len(training_loader))
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=len(training_loader), eta_min=0.00005)
         for e in range(epochs):
             running_loss = 0
             for images, labels in tqdm(training_loader):
+                self.optimizer.zero_grad()
                 images = images.to("cuda")
                 labels = labels.to("cuda")
                 time_steps = torch.randint(1, self.noise_steps, (images.shape[0],), device=self.device)
@@ -63,11 +80,11 @@ class Diffusion(nn.Module):
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-                self.optimizer.zero_grad()
                 running_loss += loss.item()
+                scheduler.step()
 
-            scheduler.step()
-            print(running_loss / len(training_loader))
+            print(f"Epoch: {e}: {running_loss/len(training_loader)}")
+
 
     def sample(self, n, context, cfg_scale=7.5):
         self.model.eval()
