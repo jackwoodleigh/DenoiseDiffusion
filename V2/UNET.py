@@ -1,12 +1,11 @@
 import torch
-import numpy as np
 from torch import nn
 from torch.nn import functional as f
 from Attention import SelfAttention, CrossAttention
 
 def TimeEmbedding(t, dim, max_period=1000, device="cuda"):
     half_dim = dim // 2
-    frequencies = torch.exp(-np.log(max_period) * torch.arange(0, half_dim, device=device, dtype=torch.float32) / half_dim)
+    frequencies = torch.exp(-torch.log(torch.tensor(max_period, device=device, dtype=torch.float32)) * torch.arange(half_dim, device=device) / half_dim)
     angles = t[:, None].float() * frequencies[None, :]
     embeddings = torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
     if dim % 2 == 1:  # if dim is odd, add an extra zero column
@@ -27,7 +26,7 @@ class SwitchSequential(nn.Sequential):
 
 
 class UNET_ResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dim_t=320):
+    def __init__(self, in_channels, out_channels, dim_t=256):
         super().__init__()
         self.input = nn.Sequential(
             nn.GroupNorm(4, in_channels),
@@ -65,7 +64,7 @@ class UNET_ResidualBlock(nn.Module):
 
 
 class UNET_AttentionBlock(nn.Module):
-    def __init__(self, n_head: int, n_embd: int, d_context=768):
+    def __init__(self, n_head: int, n_embd: int, d_context=256):
         super().__init__()
         channels = n_head * n_embd
 
@@ -75,8 +74,8 @@ class UNET_AttentionBlock(nn.Module):
         self.layernorm_1 = nn.LayerNorm(channels)
         self.attention_1 = SelfAttention(n_head, channels, in_proj_bias=False)
 
-        '''self.layernorm_2 = nn.LayerNorm(channels)
-        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)'''
+        self.layernorm_2 = nn.LayerNorm(channels)
+        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
         
         self.layernorm_3 = nn.LayerNorm(channels)
         self.linear_geglu_1 = nn.Linear(channels, 4 * channels * 2)
@@ -103,10 +102,11 @@ class UNET_AttentionBlock(nn.Module):
         x += residue_short
 
         # optional cross attention should context be added
-        ''' residue_short = x
-        x = self.layernorm_2(x)
-        x = self.attention_2(x, context)
-        x += residue_short'''
+        if context is not None:
+            residue_short = x
+            x = self.layernorm_2(x)
+            x = self.attention_2(x, context)
+            x += residue_short
 
         residue_short = x
         x = self.layernorm_3(x)
@@ -134,8 +134,9 @@ class Upsample(nn.Module):
 
 
 class UNET(nn.Module):
-    def __init__(self, in_channels=3, out_channels=3, dim_t=320, img_size=32):
+    def __init__(self, in_channels=3, out_channels=3, dim_t=256, img_size=32):
         super().__init__()
+        self.context_emb = nn.Embedding(num_embeddings=10, embedding_dim=256)
 
         self.encoder = nn.ModuleList([
             SwitchSequential(nn.Conv2d(in_channels, 64, kernel_size=3, padding=1)),
@@ -192,22 +193,26 @@ class UNET(nn.Module):
         self.output_layer = nn.Sequential(
             nn.GroupNorm(4, 64),
             nn.SiLU(),
-            nn.Conv2d(64, 3, kernel_size=3, padding=1)
+            nn.Conv2d(64, out_channels, kernel_size=3, padding=1)
         )
 
     def forward(self, x, t, context):
-        t = TimeEmbedding(t, 320)
+        t = TimeEmbedding(t, 256)
+
+        if context is not None:
+            context = self.context_emb(context)
+
         residuals = []
         for layer in self.encoder:
-            x = layer(x, t, torch.tensor([1]))
+            x = layer(x, t, context)
             residuals.append(x)
 
         for layer in self.bottleneck:
-            x = layer(x, t, torch.tensor([1]))
+            x = layer(x, t, context)
 
         for layer in self.decoder:
             x = torch.cat((x, residuals.pop()), dim=1)
-            x = layer(x, t, torch.tensor([1]))
+            x = layer(x, t, context)
 
         return self.output_layer(x)
 
