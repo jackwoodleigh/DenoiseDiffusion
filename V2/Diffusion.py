@@ -1,4 +1,5 @@
 import torch
+import wandb
 from torch import nn
 from torch.nn import functional as f
 from UNET import UNET
@@ -51,40 +52,69 @@ class DiffusionModel(nn.Module):
         x_t = torch.sqrt(alpha_hat_t) * x_0 + torch.sqrt(1.0 - alpha_hat_t) * noise
         return x_t
 
-    def predict(self, images, context, t, noise):
-        noisy_image = self.add_noise(images, noise, t)
-        pred_noise = self.model(noisy_image, t, context)
-        return pred_noise
+    def training_step(self, loss):
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        # scheduler.step()
 
-    def train_model(self, training_loader, validation_loader, epochs, cfg_scale=7.5):
+    def predict(self, images, context, learning=True):
+        images = images.to("cuda")
+        context = context.to("cuda")
+        t = torch.randint(1, self.noise_steps, (images.shape[0],), device=self.device)
+        noise = torch.randn_like(images, device=self.device)
+
+        # for CFG
+        if torch.rand(1).item() < 0.1:
+            context = None
+
+        with autocast(dtype=torch.float16):
+            noisy_image = self.add_noise(images, noise, t)
+            pred_noise = self.model(noisy_image, t, context)
+            loss = self.MSE(noise, pred_noise)
+
+        if learning:
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+        l = loss.item()
+        return l
+
+    def train_model(self, training_loader, validation_loader, epochs, cfg_scale=7.5, log=False, save_path="save.pt"):
         self.model.train()
         #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=len(training_loader))
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=len(training_loader), eta_min=0.00005)
+        #scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=len(training_loader), eta_min=0.00005)
+
         for e in range(epochs):
-            running_loss = 0
+            epoch_training_loss = 0
+            epoch_validation_loss = 0
+            print(f"Epoch {e}...")
+
+            # Training
             for images, labels in tqdm(training_loader):
                 self.optimizer.zero_grad()
-                images = images.to("cuda")
-                labels = labels.to("cuda")
-                time_steps = torch.randint(1, self.noise_steps, (images.shape[0],), device=self.device)
-                noise = torch.randn_like(images, device=self.device)
+                loss = self.predict(images, labels, learning=True)
+                epoch_training_loss += loss
 
-                # for CFG
-                if torch.rand(1).item() < 0.1:
-                    labels = None
 
-                with autocast():
-                    pred_noise = self.predict(images, labels, time_steps, noise)
-                    loss = self.MSE(noise, pred_noise)
+            # Validation
+            with torch.no_grad():
+                for images, labels in tqdm(validation_loader):
+                    loss = self.predict(images, labels, learning=False)
+                    epoch_validation_loss += loss
 
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                running_loss += loss.item()
-                scheduler.step()
+            epoch_validation_loss /= len(validation_loader)
+            epoch_training_loss /= len(training_loader)
 
-            print(f"Epoch: {e}: {running_loss/len(training_loader)}")
-
+            print(f"Training Loss: {epoch_training_loss}, Validation Loss: {epoch_validation_loss}")
+            # Epoch logging
+            if log:
+                pil_image = self.sample(8, None)
+                image = wandb.Image(pil_image, caption=f"class 2")
+                wandb.log({"Training_Loss": epoch_training_loss, "Validation_Loss": epoch_validation_loss, "Sample": image})
+                torch.save(self.model.state_dict(), save_path)
+                print("Model Saved.")
 
     def sample(self, n, context, cfg_scale=7.5):
         self.model.eval()
@@ -115,10 +145,8 @@ class DiffusionModel(nn.Module):
                     noise = torch.zeros_like(x)
 
                 x = 1 / torch.sqrt(alpha) * (
-                            x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * conditional_pred) + torch.sqrt(
+                        x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * conditional_pred) + torch.sqrt(
                     beta) * noise
-
-                print(i)
 
             x = (x.clamp(-1, 1) + 1) / 2
             x = (x * 255).type(torch.uint8)

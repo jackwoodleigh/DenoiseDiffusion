@@ -201,9 +201,10 @@ class UNET(nn.Module):
         self.output_layer = nn.Sequential(
             nn.GroupNorm(4, 64),
             nn.SiLU(),
-            nn.Conv2d(64, 32, kernel_size=3, padding=1),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
             nn.SiLU(),
-            nn.Conv2d(32, out_channels, kernel_size=3, padding=1)
+            nn.Conv2d(64, out_channels, kernel_size=3, padding=1),
+
         )
 
     def forward(self, x, t, context):
@@ -224,7 +225,9 @@ class UNET(nn.Module):
             x = torch.cat((x, residuals.pop()), dim=1)
             x = layer(x, t, context)
 
-        return self.output_layer(x)
+        x = self.output_layer(x)
+
+        return x
 
 '''
 n = UNET()
