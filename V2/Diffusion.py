@@ -6,7 +6,7 @@ from UNET import UNET
 from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 from tqdm import tqdm
-
+from math import pi
 
 class DiffusionModel(nn.Module):
     def __init__(self, img_size=32,
@@ -14,11 +14,13 @@ class DiffusionModel(nn.Module):
                  out_channels=3,
                  noise_steps=1000,
                  learning_rate=0.0001,
+                 min_learning_rate=0.00005,
                  beta_start=0.00085,
                  beta_end=0.0120,
                  num_classes=10,
                  context_embd_dim=256,
                  time_embd_dim=256,
+                 noise_schedule="quad",
                  device="cuda"):
 
         super().__init__()
@@ -27,6 +29,8 @@ class DiffusionModel(nn.Module):
         self.beta_start = beta_start
         self.beta_end = beta_end
         self.device = device
+        self.learning_rate = learning_rate
+        self.min_learning_rate = min_learning_rate
 
         self.model = UNET(
             in_channels=in_channels,
@@ -39,13 +43,22 @@ class DiffusionModel(nn.Module):
         self.MSE = nn.MSELoss()
         self.scaler = torch.cuda.amp.GradScaler()
 
-        self.beta = self.noise_scheduler()
+        self.beta = self.beta_schedule(type=noise_schedule)
         self.alpha = 1. - self.beta
         self.alpha_hat = torch.cumprod(self.alpha, dim=0)
 
-    def noise_scheduler(self):
-        return torch.linspace(self.beta_start ** 0.5, self.beta_end ** 0.5, self.noise_steps, device=self.device,
-                              dtype=torch.float32) ** 2
+    def beta_schedule(self, type="quad", s=0.008):
+        if type == "linear":
+            return torch.linspace(self.beta_start, self.beta_end, self.noise_steps, dtype=torch.float32, device=self.device)
+        elif type == "quad":
+            return torch.linspace(self.beta_start ** 0.5, self.beta_end ** 0.5, self.noise_steps, device=self.device,dtype=torch.float32) ** 2
+        else:
+            timesteps = (torch.arange(self.noise_steps + 1, dtype=torch.float32, device=self.device) / self.noise_steps + s)
+            alphas = timesteps / (1 + s) * pi / 2
+            alphas = torch.cos(alphas).pow(2)
+            alphas = alphas / alphas[0]
+            betas = 1 - alphas[1:] / alphas[:-1]
+            return betas.clamp(max=0.999)
 
     def add_noise(self, x_0, noise, t):
         alpha_hat_t = self.alpha_hat[t][:, None, None, None]
@@ -74,6 +87,7 @@ class DiffusionModel(nn.Module):
             loss = self.MSE(noise, pred_noise)
 
         if learning:
+
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -81,10 +95,10 @@ class DiffusionModel(nn.Module):
         l = loss.item()
         return l
 
-    def train_model(self, training_loader, validation_loader, epochs, cfg_scale=7.5, log=False, save_path="save.pt"):
+    def train_model(self, training_loader, validation_loader, epochs, log=False, save_path="save.pt"):
         self.model.train()
         #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=len(training_loader))
-        #scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=len(training_loader), eta_min=0.00005)
+        #scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=len(training_loader)*5, eta_min=self.min_learning_rate)
 
         for e in range(epochs):
             epoch_training_loss = 0
@@ -96,6 +110,8 @@ class DiffusionModel(nn.Module):
                 self.optimizer.zero_grad()
                 loss = self.predict(images, labels, learning=True)
                 epoch_training_loss += loss
+                #scheduler.step()
+
 
 
             # Validation
@@ -106,6 +122,7 @@ class DiffusionModel(nn.Module):
 
             epoch_validation_loss /= len(validation_loader)
             epoch_training_loss /= len(training_loader)
+
 
             print(f"Training Loss: {epoch_training_loss}, Validation Loss: {epoch_validation_loss}")
             # Epoch logging
@@ -152,3 +169,6 @@ class DiffusionModel(nn.Module):
             x = (x * 255).type(torch.uint8)
 
         return x
+
+    def load_model(self):
+        self.model.load_state_dict(torch.load('model_save1.pt'))
