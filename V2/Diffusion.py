@@ -36,7 +36,7 @@ class DiffusionModel(nn.Module):
         self.min_learning_rate = min_learning_rate
         self.warm_up = warm_up
 
-        self.model = UNet(in_channels=3, out_channels=3, T=noise_steps, block_layout=[2, 3, 3, 3], d_model=128, block_multiplier=2).to(device)
+        self.model = UNet(in_channels=3, out_channels=3, T=noise_steps, block_layout=[3, 2, 2, 2], block_multiplier=[1, 2, 2, 2], d_model=128).to(device)
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.MSE = nn.MSELoss()
@@ -77,12 +77,15 @@ class DiffusionModel(nn.Module):
     def predict(self, images, context, learning=True):
         images = images.to("cuda")
         context = context.to("cuda")
+
+
         t = torch.randint(1, self.noise_steps, (images.shape[0],), device=self.device)
         noise = torch.randn_like(images, device=self.device)
 
-        '''# for CFG
-        if torch.rand(1).item() < 0.1:
-            context = None'''
+        # for CFG
+        if learning:
+            if np.random.rand() < 0.1:
+                context = torch.zeros_like(context).to(self.device)
 
         with autocast(dtype=torch.float16):
             noisy_image = self.add_noise(images, noise, t)
@@ -150,10 +153,10 @@ class DiffusionModel(nn.Module):
 
                 # classifier free guidance
                 conditional_pred = self.model(x, t, context)
-                '''if cfg_scale > 0:
-                    unconditional_pred = self.model(x, t, None)
+                if cfg_scale > 0:
+                    unconditional_pred = self.model(x, t, torch.zeros_like(context).to(self.device))
                     conditional_pred = cfg_scale * (conditional_pred - unconditional_pred) + unconditional_pred
-'''
+
                 # broadcasting to (noise_step, 1, 1, 1)
                 alpha = self.alpha[t][:, None, None, None]
                 alpha_hat = self.alpha_hat[t][:, None, None, None]
@@ -176,3 +179,5 @@ class DiffusionModel(nn.Module):
 
     def load_model(self):
         self.model.load_state_dict(torch.load('model_save1_XL.pt'))
+
+

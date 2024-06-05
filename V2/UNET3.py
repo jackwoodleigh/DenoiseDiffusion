@@ -144,7 +144,7 @@ class ResBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, in_channels, out_channels, T, block_layout, d_model=64, block_multiplier=2):
+    def __init__(self, in_channels, out_channels, T, block_layout, block_multiplier, d_model=64):
         super().__init__()
         if block_layout is None:
             block_layout = [2, 2, 2, 2]
@@ -160,7 +160,7 @@ class UNet(nn.Module):
         down_channel_list = [d_model]
         previous_channels = d_model
         for i, count in enumerate(block_layout):
-            current_channels = d_model * (block_multiplier**(i+1))
+            current_channels = d_model * (block_multiplier[i]**(i+1))
 
             # for number of blocks in current layer
             for block in range(count):
@@ -184,7 +184,7 @@ class UNet(nn.Module):
         self.up = nn.ModuleList()
         # Layers in encoder
         for i, count in reversed(list(enumerate(block_layout))):
-            current_channels = d_model * (block_multiplier**(i+1))
+            current_channels = d_model * (block_multiplier[i]**(i+1))
 
             # for number of blocks in current layer
             for block in range(count + 1):
@@ -231,8 +231,8 @@ class UNet(nn.Module):
         return x
 
 
-model = UNet(in_channels=3, out_channels=3, T=1000, block_layout=[2, 2, 2, 2], d_model=128, block_multiplier=2)
+'''model = UNet(in_channels=3, out_channels=3, T=1000, block_layout=[2, 2, 2, 2], d_model=128, block_multiplier=2)
 x = torch.randn(10, 3, 32, 32)
 t = torch.randint(1, 1000, (10,))
-context = torch.randint(0, 10, (10,))
+context = torch.randint(0, 10, (10,))'''
 #print(model(x, t, context).shape)
