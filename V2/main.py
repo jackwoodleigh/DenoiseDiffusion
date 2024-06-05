@@ -24,9 +24,9 @@ if __name__ == '__main__':
 
 
     model = DiffusionModel(learning_rate=0.001).to("cuda")
-    '''n = torch.tensor(1)
-    t = torch.tensor([1])
-    model.train_model(training_loader, training_loader, 100, log=False)'''
+    #n = torch.tensor(1)
+    #t = torch.tensor([1])
+    #model.train_model(training_loader, training_loader, 100, log=False)
 
     model.load_model()
     c = torch.tensor([1 for i in range(16)], device="cuda")

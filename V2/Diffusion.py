@@ -2,11 +2,13 @@ import torch
 import wandb
 from torch import nn
 from torch.nn import functional as f
-from UNET import UNET
+from UNET3 import UNet
 from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 from tqdm import tqdm
 from math import pi
+
+
 
 class DiffusionModel(nn.Module):
     def __init__(self, img_size=32,
@@ -19,8 +21,9 @@ class DiffusionModel(nn.Module):
                  beta_end=0.0120,
                  num_classes=10,
                  context_embd_dim=256,
-                 time_embd_dim=256,
+                 time_embd_dim=257,
                  noise_schedule="quad",
+                 warm_up=1000,
                  device="cuda"):
 
         super().__init__()
@@ -31,15 +34,11 @@ class DiffusionModel(nn.Module):
         self.device = device
         self.learning_rate = learning_rate
         self.min_learning_rate = min_learning_rate
+        self.warm_up = warm_up
 
-        self.model = UNET(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            context_embd_dim=context_embd_dim,
-            time_embd_dim=time_embd_dim
-        ).to(device)
+        self.model = UNet(in_channels=3, out_channels=3, T=noise_steps, block_layout=[2, 3, 3, 3], d_model=128, block_multiplier=2).to(device)
 
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.MSE = nn.MSELoss()
         self.scaler = torch.cuda.amp.GradScaler()
 
@@ -60,6 +59,10 @@ class DiffusionModel(nn.Module):
             betas = 1 - alphas[1:] / alphas[:-1]
             return betas.clamp(max=0.999)
 
+    def warmup_lr(self, step):
+        return min(step, self.warm_up) / self.warm_up
+
+
     def add_noise(self, x_0, noise, t):
         alpha_hat_t = self.alpha_hat[t][:, None, None, None]
         x_t = torch.sqrt(alpha_hat_t) * x_0 + torch.sqrt(1.0 - alpha_hat_t) * noise
@@ -77,9 +80,9 @@ class DiffusionModel(nn.Module):
         t = torch.randint(1, self.noise_steps, (images.shape[0],), device=self.device)
         noise = torch.randn_like(images, device=self.device)
 
-        # for CFG
+        '''# for CFG
         if torch.rand(1).item() < 0.1:
-            context = None
+            context = None'''
 
         with autocast(dtype=torch.float16):
             noisy_image = self.add_noise(images, noise, t)
@@ -87,7 +90,6 @@ class DiffusionModel(nn.Module):
             loss = self.MSE(noise, pred_noise)
 
         if learning:
-
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -96,24 +98,26 @@ class DiffusionModel(nn.Module):
         return l
 
     def train_model(self, training_loader, validation_loader, epochs, log=False, save_path="save.pt"):
-        self.model.train()
+
         #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=len(training_loader))
         #scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optimizer, T_0=len(training_loader)*5, eta_min=self.min_learning_rate)
+        self.warm_up = len(training_loader)*4
+        scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.warmup_lr)
 
         for e in range(epochs):
             epoch_training_loss = 0
             epoch_validation_loss = 0
             print(f"Epoch {e}...")
-
+            self.model.train()
             # Training
             for images, labels in tqdm(training_loader):
                 self.optimizer.zero_grad()
                 loss = self.predict(images, labels, learning=True)
                 epoch_training_loss += loss
-                #scheduler.step()
+                scheduler.step()
 
 
-
+            self.model.eval()
             # Validation
             with torch.no_grad():
                 for images, labels in tqdm(validation_loader):
@@ -127,7 +131,7 @@ class DiffusionModel(nn.Module):
             print(f"Training Loss: {epoch_training_loss}, Validation Loss: {epoch_validation_loss}")
             # Epoch logging
             if log:
-                pil_image = self.sample(8, None)
+                pil_image = self.sample(8, torch.tensor([1], device=self.device))
                 image = wandb.Image(pil_image, caption=f"class 2")
                 wandb.log({"Training_Loss": epoch_training_loss, "Validation_Loss": epoch_validation_loss, "Sample": image})
                 torch.save(self.model.state_dict(), save_path)
@@ -146,10 +150,10 @@ class DiffusionModel(nn.Module):
 
                 # classifier free guidance
                 conditional_pred = self.model(x, t, context)
-                if cfg_scale > 0:
+                '''if cfg_scale > 0:
                     unconditional_pred = self.model(x, t, None)
                     conditional_pred = cfg_scale * (conditional_pred - unconditional_pred) + unconditional_pred
-
+'''
                 # broadcasting to (noise_step, 1, 1, 1)
                 alpha = self.alpha[t][:, None, None, None]
                 alpha_hat = self.alpha_hat[t][:, None, None, None]
@@ -171,4 +175,4 @@ class DiffusionModel(nn.Module):
         return x
 
     def load_model(self):
-        self.model.load_state_dict(torch.load('model_save1.pt'))
+        self.model.load_state_dict(torch.load('model_save1_XL.pt'))
