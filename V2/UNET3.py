@@ -130,12 +130,15 @@ class ResBlock(nn.Module):
 
     def forward(self, x, t, context):
         residual = x
-        t = self.t_proj(t)[:, :, None, None]
-        context = self.context_proj(context)[:, :, None, None]
-
         x = self.block_1(x)
+
+        t = self.t_proj(t)[:, :, None, None]
         x += t
-        x += context
+
+        if context is not None:
+            context = self.context_proj(context)[:, :, None, None]
+            x += context
+
         x = self.block_2(x)
 
         x += self.residual(residual)
@@ -144,24 +147,20 @@ class ResBlock(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, in_channels, out_channels, T, block_layout, block_multiplier, d_model=64):
+    def __init__(self, in_channels, out_channels, T, block_structure, block_multiplier, d_model=64):
         super().__init__()
-        if block_layout is None:
-            block_layout = [2, 2, 2, 2]
         self.tdim = d_model * 4
         self.time_emb = TimeEmbedding(T, d_model, self.tdim)
         self.context_emb = ContextEmbedding(10, d_model, self.tdim)
 
         self.input = nn.Conv2d(in_channels, d_model, kernel_size=3, padding=1)
 
-
         # Decoder
         self.down = nn.ModuleList()
         down_channel_list = [d_model]
         previous_channels = d_model
-        for i, count in enumerate(block_layout):
+        for i, count in enumerate(block_structure):
             current_channels = d_model * (block_multiplier[i]**(i+1))
-
             # for number of blocks in current layer
             for block in range(count):
                 self.down.append(ResBlock(previous_channels, current_channels, self.tdim))
@@ -169,7 +168,7 @@ class UNet(nn.Module):
                 down_channel_list.append(previous_channels)
 
             # adding down sample blocks
-            if i != len(block_layout)-1:
+            if i != len(block_structure)-1:
                 self.down.append(Down_Sample(previous_channels))
                 down_channel_list.append(previous_channels)
 
@@ -183,7 +182,7 @@ class UNet(nn.Module):
         # Encoder
         self.up = nn.ModuleList()
         # Layers in encoder
-        for i, count in reversed(list(enumerate(block_layout))):
+        for i, count in reversed(list(enumerate(block_structure))):
             current_channels = d_model * (block_multiplier[i]**(i+1))
 
             # for number of blocks in current layer
@@ -205,7 +204,8 @@ class UNet(nn.Module):
 
     def forward(self, x, t, context):
         t = self.time_emb(t)
-        context = self.context_emb(context)
+        if context is not None:
+            context = self.context_emb(context)
 
         x = self.input(x)
         skip_connect = [x]
@@ -231,8 +231,11 @@ class UNet(nn.Module):
         return x
 
 
-'''model = UNet(in_channels=3, out_channels=3, T=1000, block_layout=[2, 2, 2, 2], d_model=128, block_multiplier=2)
+
+
+'''
+model = UNet(in_channels=3, out_channels=3, T=1000, block_layout=[1, 1, 1], d_model=64, block_multiplier=[2, 2, 2, 2])
 x = torch.randn(10, 3, 32, 32)
 t = torch.randint(1, 1000, (10,))
-context = torch.randint(0, 10, (10,))'''
-#print(model(x, t, context).shape)
+context = torch.randint(0, 10, (10,))
+'''

@@ -11,7 +11,11 @@ from math import pi
 
 
 class DiffusionModel(nn.Module):
-    def __init__(self, img_size=32,
+    def __init__(self,
+                 block_structure,
+                 block_multiplier,
+                 d_model=64,
+                 img_size=32,
                  in_channels=3,
                  out_channels=3,
                  noise_steps=1000,
@@ -24,6 +28,7 @@ class DiffusionModel(nn.Module):
                  time_embd_dim=257,
                  noise_schedule="quad",
                  warm_up=1000,
+
                  device="cuda"):
 
         super().__init__()
@@ -36,7 +41,7 @@ class DiffusionModel(nn.Module):
         self.min_learning_rate = min_learning_rate
         self.warm_up = warm_up
 
-        self.model = UNet(in_channels=3, out_channels=3, T=noise_steps, block_layout=[3, 2, 2, 2], block_multiplier=[1, 2, 2, 2], d_model=128).to(device)
+        self.model = UNet(in_channels=3, out_channels=3, T=noise_steps, block_structure=block_structure, block_multiplier=block_multiplier, d_model=d_model).to(device)
 
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         self.MSE = nn.MSELoss()
@@ -85,7 +90,7 @@ class DiffusionModel(nn.Module):
         # for CFG
         if learning:
             if np.random.rand() < 0.1:
-                context = torch.zeros_like(context).to(self.device)
+                context = None
 
         with autocast(dtype=torch.float16):
             noisy_image = self.add_noise(images, noise, t)
@@ -154,7 +159,7 @@ class DiffusionModel(nn.Module):
                 # classifier free guidance
                 conditional_pred = self.model(x, t, context)
                 if cfg_scale > 0:
-                    unconditional_pred = self.model(x, t, torch.zeros_like(context).to(self.device))
+                    unconditional_pred = self.model(x, t, None)
                     conditional_pred = cfg_scale * (conditional_pred - unconditional_pred) + unconditional_pred
 
                 # broadcasting to (noise_step, 1, 1, 1)
@@ -180,4 +185,5 @@ class DiffusionModel(nn.Module):
     def load_model(self):
         self.model.load_state_dict(torch.load('model_save1_XL.pt'))
 
-
+    def print_parameter_count(self):
+        print(sum(p.numel() for p in self.model.parameters()))

@@ -20,16 +20,16 @@ if __name__ == '__main__':
 
 
     training_subset = Subset(training_set, list(range(5000)))
-    training_loader = DataLoader(training_subset, batch_size=32, shuffle=True, num_workers=1,  pin_memory=True)
+    training_loader = DataLoader(training_set, batch_size=64, shuffle=True, num_workers=4,  pin_memory=True)
 
 
-    model = DiffusionModel(learning_rate=0.001).to("cuda")
-    #n = torch.tensor(1)
-    #t = torch.tensor([1])
-    #model.train_model(training_loader, training_loader, 100, log=False)
+    model = DiffusionModel(learning_rate=0.001, block_structure = [1, 1, 1], block_multiplier = [2, 2, 2]).to("cuda")
+    n = torch.tensor(1)
+    t = torch.tensor([1])
+    model.train_model(training_loader, training_loader, 100, log=False)
 
-    model.load_model()
+    '''model.load_model()
     c = torch.tensor([1 for i in range(16)], device="cuda")
 
     x = model.sample(16, c)
-    save_images(x, os.path.join("output_images", "grid_image.png"), nrow=4, padding=2)
+    save_images(x, os.path.join("output_images", "grid_image.png"), nrow=4, padding=2)'''
