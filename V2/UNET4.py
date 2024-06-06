@@ -2,8 +2,8 @@ import torch
 from torch import nn
 import math
 from torch.nn import functional as F
-class TimeEmbedding(nn.Module):
-    def __init__(self, T, d_model, dim):
+class Embedding(nn.Module):
+    def __init__(self, T, d_model, emb_dim, num_labels):
         assert d_model % 2 == 0
         super().__init__()
         emb = torch.arange(0, d_model, step=2) / d_model * math.log(10000)
@@ -13,32 +13,21 @@ class TimeEmbedding(nn.Module):
         emb = torch.stack([torch.sin(emb), torch.cos(emb)], dim=-1)
         emb = emb.view(T, d_model)
 
-        self.timembedding = nn.Sequential(
+        self.time_embedding = nn.Sequential(
             nn.Embedding.from_pretrained(emb, freeze=False),
-            nn.Linear(d_model, dim),
+            nn.Linear(d_model, emb_dim),
             nn.SiLU(),
-            nn.Linear(dim, dim),
+            nn.Linear(emb_dim, emb_dim),
         )
+        self.label_embedding = nn.Embedding(num_embeddings=num_labels, embedding_dim=emb_dim, padding_idx=0)
 
-    def forward(self, t):
-        emb = self.timembedding(t)
+    def forward(self, time, labels):
+        emb = self.time_embedding(time)
+        if labels is not None:
+            emb += self.label_embedding(labels)
+        emb = F.silu(emb)
         return emb
 
-
-class ContextEmbedding(nn.Module):
-    def __init__(self, num_labels, d_model, dim):
-        assert d_model % 2 == 0
-        super().__init__()
-        self.condEmbedding = nn.Sequential(
-            nn.Embedding(num_embeddings=num_labels + 1, embedding_dim=d_model, padding_idx=0),
-            nn.Linear(d_model, dim),
-            nn.SiLU(),
-            nn.Linear(dim, dim),
-        )
-
-    def forward(self, t):
-        emb = self.condEmbedding(t)
-        return emb
 
 class Down_Sample(nn.Module):
     def __init__(self, channels):
@@ -46,7 +35,7 @@ class Down_Sample(nn.Module):
         self.conv1 = nn.Conv2d(channels, channels, 3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(channels, channels, 5, stride=2, padding=2)
 
-    def forward(self, x, temb, cemb):
+    def forward(self, x, emb):
         x = self.conv1(x) + self.conv2(x)
         return x
 
@@ -55,7 +44,7 @@ class Up_Sample(nn.Module):
         super().__init__()
         self.conv = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
 
-    def forward(self, x, temb, cemb):
+    def forward(self, x, emb):
         x = F.interpolate(x, scale_factor=2, mode='nearest')
         return self.conv(x)
 
@@ -91,16 +80,14 @@ class SelfAttention(nn.Module):
 
 
 
-
-
-class ResBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, tdim, dropout_rate=0.3, self_attention=True):
+class DownBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, emb_dim, dropout_rate=0.3, self_attention=True):
         super().__init__()
         self.block_1 = nn.Sequential(
             nn.GroupNorm(32, in_channels),
             nn.SiLU(),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(32, in_channels)
+            nn.GroupNorm(32, out_channels)
             #nn.Dropout(dropout_rate),
 
         )
@@ -111,14 +98,7 @@ class ResBlock(nn.Module):
             nn.GroupNorm(32, out_channels),
 
         )
-        self.t_proj = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(tdim, out_channels),
-        )
-        self.context_proj = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(tdim, out_channels),
-        )
+        self.embedding_block = nn.Linear(emb_dim, 2*out_channels)
 
         # matching channels of residual
         if in_channels == out_channels:
@@ -131,21 +111,20 @@ class ResBlock(nn.Module):
         else:
             self.self_attention = nn.Identity()
 
-    def forward(self, x, t, context):
+    def forward(self, x, embedding):
         residual = x
 
         x = self.block_1(x)
 
-        t = self.t_proj(t)[:, :, None, None]
-        x += t
-
-        if context is not None:
-            context = self.context_proj(context)[:, :, None, None]
-            x += context
+        emb = self.embedding_block(embedding)
+        emb1, emb2 = emb.chunk(2, dim=1)
+        x *= emb1[:, :, None, None] + 1.
+        x += emb2[:, :, None, None]
 
         x = self.block_2(x)
 
         x += self.residual(residual)
+
         x = self.self_attention(x)
         return x
 
@@ -153,9 +132,8 @@ class ResBlock(nn.Module):
 class UNet(nn.Module):
     def __init__(self, in_channels, out_channels, T, block_structure, block_multiplier, d_model=64):
         super().__init__()
-        self.tdim = d_model * 4
-        self.time_emb = TimeEmbedding(T, d_model, self.tdim)
-        self.context_emb = ContextEmbedding(10, d_model, self.tdim)
+        self.emb_dim = d_model * 4
+        self.embedding = Embedding(T, d_model, self.emb_dim, 10)
 
         self.input = nn.Conv2d(in_channels, d_model, kernel_size=3, padding=1)
 
@@ -167,7 +145,7 @@ class UNet(nn.Module):
             current_channels = d_model * (block_multiplier[i]**(i+1))
             # for number of blocks in current layer
             for block in range(count):
-                self.down.append(ResBlock(previous_channels, current_channels, self.tdim))
+                self.down.append(DownBlock(previous_channels, current_channels, self.emb_dim ))
                 previous_channels = current_channels
                 down_channel_list.append(previous_channels)
 
@@ -178,8 +156,8 @@ class UNet(nn.Module):
 
         # Bottleneck
         self.bottleneck = nn.ModuleList([
-            ResBlock(previous_channels, previous_channels, self.tdim),
-            ResBlock(previous_channels, previous_channels, self.tdim)
+            DownBlock(previous_channels, previous_channels, self.emb_dim ),
+            DownBlock(previous_channels, previous_channels, self.emb_dim )
         ])
 
 
@@ -191,7 +169,7 @@ class UNet(nn.Module):
 
             # for number of blocks in current layer
             for block in range(count + 1):
-                self.up.append(ResBlock(down_channel_list.pop() + previous_channels, current_channels, self.tdim))
+                self.up.append(DownBlock(down_channel_list.pop() + previous_channels, current_channels, self.emb_dim ))
                 previous_channels = current_channels
 
             # adding down sample blocks
@@ -206,28 +184,26 @@ class UNet(nn.Module):
             nn.Conv2d(previous_channels, out_channels, kernel_size=3, padding=1)
         )
 
-    def forward(self, x, t, context):
-        t = self.time_emb(t)
-        if context is not None:
-            context = self.context_emb(context)
+    def forward(self, x, t, labels):
+        emb = self.embedding(t, labels)
 
         x = self.input(x)
         skip_connect = [x]
 
         # Decoder
         for layer in self.down:
-            x = layer(x, t, context)
+            x = layer(x, emb)
             skip_connect.append(x)
 
         # Bottleneck
         for layer in self.bottleneck:
-            x = layer(x, t, context)
+            x = layer(x, emb)
 
         # Encoder
         for layer in self.up:
-            if isinstance(layer, ResBlock):
+            if isinstance(layer, DownBlock):
                 x = torch.cat([x, skip_connect.pop()], dim=1)
-            x = layer(x, t, context)
+            x = layer(x, emb)
 
         # Output Layer
         x = self.output(x)
@@ -237,9 +213,11 @@ class UNet(nn.Module):
 
 
 
-'''
-model = UNet(in_channels=3, out_channels=3, T=1000, block_layout=[1, 1, 1], d_model=64, block_multiplier=[2, 2, 2, 2])
+
+model = UNet(in_channels=3, out_channels=3, T=1000, block_structure=[1, 1, 1], d_model=64, block_multiplier=[2, 2, 2])
 x = torch.randn(10, 3, 32, 32)
 t = torch.randint(1, 1000, (10,))
-context = torch.randint(0, 10, (10,))
-'''
+labels = torch.randint(0, 10, (10,))
+print(model(x, t, labels).shape)
+
+
