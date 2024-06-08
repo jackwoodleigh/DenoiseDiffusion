@@ -98,18 +98,15 @@ class ResBlock(nn.Module):
         super().__init__()
         self.block_1 = nn.Sequential(
             nn.GroupNorm(32, in_channels),
-            nn.SiLU(),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.GroupNorm(32, in_channels)
-            #nn.Dropout(dropout_rate),
-
+            nn.Dropout(dropout_rate),
+            nn.SiLU()
         )
         self.block_2 = nn.Sequential(
-            nn.SiLU(),
-            nn.Dropout(dropout_rate),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.GroupNorm(32, out_channels),
-
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.Dropout(dropout_rate),
+            nn.SiLU()
         )
         self.t_proj = nn.Sequential(
             nn.SiLU(),
@@ -133,16 +130,12 @@ class ResBlock(nn.Module):
 
     def forward(self, x, t, context):
         residual = x
-
         x = self.block_1(x)
-
         t = self.t_proj(t)[:, :, None, None]
         x += t
-
         if context is not None:
             context = self.context_proj(context)[:, :, None, None]
             x += context
-
         x = self.block_2(x)
 
         x += self.residual(residual)

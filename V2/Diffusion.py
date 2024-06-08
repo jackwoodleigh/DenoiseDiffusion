@@ -4,12 +4,12 @@ import torch
 import wandb
 from torch import nn
 from torch.nn import functional as f
-from UNET3 import UNet
+from UNET4 import UNet
 from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 from tqdm import tqdm
 from math import pi
-from EMA import EMA
+from EMA import ParameterEMA
 
 
 class DiffusionModel(nn.Module):
@@ -30,6 +30,7 @@ class DiffusionModel(nn.Module):
                  time_embd_dim=257,
                  noise_schedule="quad",
                  warm_up=1000,
+                 ema_weight=0.999,
                  sampler="DDPM",
                  device="cuda"):
 
@@ -46,10 +47,10 @@ class DiffusionModel(nn.Module):
         self.model = UNet(in_channels=3, out_channels=3, T=noise_steps, block_structure=block_structure,
                           block_multiplier=block_multiplier, d_model=d_model).to(device)
 
-        self.EMA = EMA()
+        self.EMA = ParameterEMA(beta=ema_weight)
         self.EMA_model = copy.deepcopy(self.model).eval().requires_grad_(False)
 
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
         self.MSE = nn.MSELoss()
         self.scaler = torch.cuda.amp.GradScaler()
 
@@ -119,6 +120,8 @@ class DiffusionModel(nn.Module):
         self.warm_up = len(training_loader) * 4
         scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.warmup_lr)
 
+        ema_start_step = len(training_loader)*4
+
         for e in range(epochs):
             epoch_training_loss = 0
             epoch_validation_loss = 0
@@ -129,7 +132,7 @@ class DiffusionModel(nn.Module):
                 self.optimizer.zero_grad()
                 loss = self.predict(images, labels, self.model, learning=True)
                 epoch_training_loss += loss
-                self.EMA.step_ema(ema_model=self.EMA_model, model=self.model)
+                self.EMA.step_ema(ema_model=self.EMA_model, model=self.model, start_step=ema_start_step)
                 scheduler.step()
 
             self.model.eval()
@@ -149,10 +152,10 @@ class DiffusionModel(nn.Module):
                 image = wandb.Image(pil_image, caption=f"class 2")
                 wandb.log(
                     {"Training_Loss": epoch_training_loss, "Validation_Loss": epoch_validation_loss, "Sample": image})
-                torch.save(self.model.state_dict(), save_path)
+                torch.save(self.EMA_model.state_dict(), save_path)
                 print("Model Saved.")
 
-    def sample(self, n, context, cfg_scale=7.5, sampler="DDPM"):
+    def sample(self, n, context, cfg_scale=5.0, sampler="DDPM"):
         self.model.eval()
         x = torch.randn(n, 3, self.img_size, self.img_size).to(self.device)
 
@@ -168,7 +171,7 @@ class DiffusionModel(nn.Module):
                 # classifier free guidance
                 conditional_pred = self.EMA_model(x, t, context)
                 if cfg_scale > 0:
-                    unconditional_pred = self.model(x, t, None)
+                    unconditional_pred = self.EMA_model(x, t, None)
                     conditional_pred = cfg_scale * (conditional_pred - unconditional_pred) + unconditional_pred
 
                 if sampler is "DDIM":
@@ -182,7 +185,7 @@ class DiffusionModel(nn.Module):
         return x
 
     def load_model(self):
-        self.model.load_state_dict(torch.load('model_save1_XL.pt'))
+        self.model.load_state_dict(torch.load('saves/model_save_exalted_micro.pt'))
 
     def print_parameter_count(self):
         print(sum(p.numel() for p in self.model.parameters()))
@@ -215,8 +218,6 @@ class DiffusionModel(nn.Module):
             noise = torch.randn_like(x)
         else:
             noise = torch.zeros_like(x)
-
-
 
         sigma_t = eta * torch.sqrt((1 - alpha_t_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_t_prev))
         epsilon_t = torch.randn_like(x)

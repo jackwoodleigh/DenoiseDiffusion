@@ -1,27 +1,29 @@
 import torch
 
 # https://arxiv.org/pdf/2312.02696
-class EMA:
+class ParameterEMA:
     def __init__(self, beta=0.999):
+        super().__init__()
         self.beta = beta
         self.step = 0
 
-    def update_model(self, ema_model, model):
-        with torch.no_grad():
-            for current_parameters, ema_parameters in zip(model.parameters(), ema_model.parameters()):
-                old_weights, new_weights = ema_parameters.data, current_parameters.data
-                ema_parameters.data = self.update_average(old_weights, new_weights)
+    def update_model_average(self, ema_model, current_model):
+        for current_params, ema_params in zip(current_model.parameters(), ema_model.parameters()):
+            old_weight, new_weight = ema_params.data, current_params.data
+            ema_params.data = self.update_average(old_weight, new_weight)
 
-    def update_average(self, old_weights, new_weights):
-        return old_weights * self.beta + (1 - self.beta) * new_weights
+    def update_average(self, old, new):
+        if old is None:
+            return new
+        return old * self.beta + (1 - self.beta) * new
 
-    def step_ema(self, ema_model, model, step_start_ema=2000):
-        if self.step < step_start_ema:
-            self.reset_parameters(ema_model, model)
+    def step_ema(self, ema_model, model, start_step=2000):
+        if self.step < start_step:
+            self.set_parameters(ema_model, model)
             self.step += 1
             return
-        self.update_model(ema_model, model)
+        self.update_model_average(ema_model, model)
         self.step += 1
 
-    def reset_parameters(self, ema_model, model):
-        ema_model.load_state_dict(model.state_dict())
+    def set_parameters(self, target_model, source_model):
+        target_model.load_state_dict(source_model.state_dict())
