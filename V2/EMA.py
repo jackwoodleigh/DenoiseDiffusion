@@ -2,7 +2,7 @@ import torch
 
 # https://arxiv.org/pdf/2312.02696
 class ParameterEMA:
-    def __init__(self, beta=0.999):
+    def __init__(self, beta=0.9995):
         super().__init__()
         self.beta = beta
         self.step = 0

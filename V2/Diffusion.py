@@ -50,7 +50,7 @@ class DiffusionModel(nn.Module):
         self.EMA = ParameterEMA(beta=ema_weight)
         self.EMA_model = copy.deepcopy(self.model).eval().requires_grad_(False)
 
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate, betas=(0.9, 0.99))
         self.MSE = nn.MSELoss()
         self.scaler = torch.cuda.amp.GradScaler()
 
@@ -121,21 +121,23 @@ class DiffusionModel(nn.Module):
         scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.warmup_lr)
 
         ema_start_step = len(training_loader)*4
+        self.model.train()
+        self.EMA_model.eval()
 
         for e in range(epochs):
             epoch_training_loss = 0
             epoch_validation_loss = 0
             print(f"Epoch {e}...")
-            self.model.train()
+
             # Training
             for images, labels in tqdm(training_loader):
                 self.optimizer.zero_grad()
-                loss = self.predict(images, labels, self.model, learning=True)
+                loss = self.predict(images, labels+1, self.model, learning=True)
                 epoch_training_loss += loss
                 self.EMA.step_ema(ema_model=self.EMA_model, model=self.model, start_step=ema_start_step)
                 scheduler.step()
 
-            self.model.eval()
+
             # Validation
             with torch.no_grad():
                 for images, labels in tqdm(validation_loader):
@@ -155,8 +157,8 @@ class DiffusionModel(nn.Module):
                 torch.save(self.EMA_model.state_dict(), save_path)
                 print("Model Saved.")
 
-    def sample(self, n, context, cfg_scale=5.0, sampler="DDPM"):
-        self.model.eval()
+    def sample(self, n, context, cfg_scale=7.5, sampler="DDPM"):
+        self.EMA_model.eval()
         x = torch.randn(n, 3, self.img_size, self.img_size).to(self.device)
 
         steps = self.noise_steps
@@ -174,7 +176,7 @@ class DiffusionModel(nn.Module):
                     unconditional_pred = self.EMA_model(x, t, None)
                     conditional_pred = cfg_scale * (conditional_pred - unconditional_pred) + unconditional_pred
 
-                if sampler is "DDIM":
+                if sampler == "DDIM":
                     x = self.DDIM_Sampler(x, conditional_pred, i, t)
                 else:
                     x = self.DDPM_Sampler(x, conditional_pred, i, t)
@@ -184,8 +186,8 @@ class DiffusionModel(nn.Module):
 
         return x
 
-    def load_model(self):
-        self.model.load_state_dict(torch.load('saves/model_save_exalted_micro.pt'))
+    def load_model(self, path):
+        self.EMA_model.load_state_dict(torch.load(path))
 
     def print_parameter_count(self):
         print(sum(p.numel() for p in self.model.parameters()))

@@ -55,8 +55,21 @@ if __name__ == '__main__':
     t = torch.tensor([1])
     model.train_model(training_loader, training_loader, 100, log=False)'''
 
-    model.load_model()
-    c = torch.tensor([1 for i in range(16)], device="cuda")
+    model.load_model(path="./saves/model_save_charmed-music-130.pth")
+    img_list = []
+    for i in range(1, 10):
+        c = torch.tensor([i], device="cuda")
+        img_list.append(model.sample(8, c, sampler="DDPM"))
+        print(i)
 
-    x = model.sample(16, c)
-    save_images(x, os.path.join("output_images", "grid_image.png"), nrow=4, padding=2)
+    img = torch.cat(img_list, dim=0).type(torch.uint8)
+    save_images(img, os.path.join("output_images", "grid_image.png"), nrow=8, padding=2)
+
+
+    '''
+    
+    1. rework channel multiplier 
+    2. add multihead attention
+    https://arxiv.org/pdf/2403.03431 when to use cross attention and not
+    
+    '''
