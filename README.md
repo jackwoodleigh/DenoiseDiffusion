@@ -1,6 +1,6 @@
 ### DenoiseDiffusion
 
-#### Current Samples
+#### Current Samples (CIFAR10)
 ![](https://github.com/jackwoodleigh/DenoiseDiffusion/blob/main/V2/sample_images/grid_image.png)
 
 #### Resource 
