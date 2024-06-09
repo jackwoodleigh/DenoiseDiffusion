@@ -3,7 +3,7 @@
 #### Current Samples
 ![](https://github.com/jackwoodleigh/DenoiseDiffusion/blob/main/V2/sample_images/grid_image.png)
 
-####Resource 
+#### Resource 
 - https://github.com/tcapelle/Diffusion-Models-pytorch/tree/main
 - https://github.com/kjsman/stable-diffusion-pytorch/tree/main
 - https://github.com/w86763777/pytorch-ddpm/blob/master/model.py#L166
